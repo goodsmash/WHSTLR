@@ -345,41 +345,42 @@ const MemeGenerator = () => {
     setGeneratedImage(null);
 
     try {
-      console.log('Sending request to:', `${API_BASE_URL}/generate-meme`);
+      const fullUrl = `${API_BASE_URL}/api/generate-meme`;
+      console.log('Sending request to:', fullUrl);
       console.log('Request payload:', {
-        prompt: `${prompt} (in ${selectedStyle} style)`,
+        prompt,
         style: selectedStyle,
       });
 
-      const response = await fetch(`${API_BASE_URL}/generate-meme`, {
+      const response = await fetch(fullUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
         body: JSON.stringify({
-          prompt: `${prompt} (in ${selectedStyle} style)`,
+          prompt,
           style: selectedStyle,
         }),
+        credentials: 'include',
       });
 
       console.log('Response status:', response.status);
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Server error: ${response.status}`);
+      }
+
       const data = await response.json();
       console.log('Response data:', data);
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Failed to generate meme');
-      }
 
       if (!data.imageUrl) {
         throw new Error('No image URL received from server');
       }
 
       setGeneratedImage(data.imageUrl);
-      setStats({
-        memesRemaining: data.memesRemaining,
-        userTotal: data.userTotal,
-        maxPerUser: data.maxPerUser,
-      });
+      await fetchStats(); // Refresh stats after successful generation
     } catch (err) {
       console.error('Failed to generate meme:', err);
       setError(err.message || 'Failed to generate meme. Please try again.');

@@ -9,6 +9,12 @@ const cookieParser = require('cookie-parser');
 const OpenAI = require('openai');
 require('dotenv').config();
 
+// Initialize OpenAI
+console.log('Initializing OpenAI with API key:', process.env.OPENAI_API_KEY ? 'Present' : 'Missing');
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
 // Initialize Express app
 const app = express();
 
@@ -26,7 +32,7 @@ app.use('/api', (req, res, next) => {
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? ['https://whistleblower.dev', 'https://www.whistleblower.dev']
-    : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003'],
+    : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:3004'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -37,7 +43,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      connectSrc: ["'self'", "http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003", "https://api.openai.com"],
+      connectSrc: ["'self'", "http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003", "http://localhost:3004", "https://api.openai.com"],
       imgSrc: ["'self'", "data:", "https:", "http:", "https://*.openai.com"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
@@ -77,13 +83,6 @@ app.use(xss());
 app.use(mongoSanitize());
 app.use(hpp());
 app.use(cookieParser());
-
-// Initialize OpenAI with debug logging
-console.log('Initializing OpenAI with API key:', process.env.OPENAI_API_KEY ? 'Present' : 'Missing');
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: 'https://api.openai.com/v1'
-});
 
 // Test OpenAI connection on startup
 async function testOpenAI() {
@@ -307,9 +306,14 @@ app.post('/api/generate-meme', async (req, res) => {
   const startTime = Date.now();
   const { prompt, style } = req.body;
 
-  try {
-    console.log('Received request:', { prompt, style });
+  console.log('Received meme generation request:', {
+    prompt,
+    style,
+    clientIP: clientIP.replace(/::ffff:/, ''),
+    timestamp: new Date().toISOString()
+  });
 
+  try {
     // Input validation
     if (!prompt) {
       throw new Error('Prompt is required');
@@ -338,7 +342,7 @@ app.post('/api/generate-meme', async (req, res) => {
     const enhancedPrompt = enhancePrompt(prompt, style);
     console.log('Enhanced prompt:', enhancedPrompt);
 
-    // Generate image with OpenAI using our optimized settings
+    // Generate image with OpenAI
     console.log('Calling OpenAI API...');
     const response = await openai.images.generate({
       model: "dall-e-3",
@@ -349,43 +353,34 @@ app.post('/api/generate-meme', async (req, res) => {
       response_format: "url"
     });
 
-    console.log('OpenAI API response:', JSON.stringify(response, null, 2));
-
     if (!response.data || !response.data[0] || !response.data[0].url) {
-      throw new Error('Invalid response from OpenAI API');
+      throw new Error('Failed to generate image: Invalid response from OpenAI');
     }
 
-    const imageUrl = response.data[0].url;
-
-    // Update statistics
-    memeStats.totalGenerated++;
+    // Update stats
     memeStats.memesRemaining--;
-    memeStats.successfulGenerations++;
-    memeStats.generationTimes.push(Date.now() - startTime);
     memeStats.userLimits.set(clientIP, userTotal + 1);
+    memeStats.totalGenerated++;
 
-    // Return success response
-    res.json({
-      success: true,
-      imageUrl,
-      memesRemaining: memeStats.memesRemaining,
-      userTotal: userTotal + 1,
-      maxPerUser: memeStats.maxPerUser,
-      generationTime: `${((Date.now() - startTime) / 1000).toFixed(1)}s`
+    const imageUrl = response.data[0].url;
+    console.log('Successfully generated meme:', {
+      imageUrl: imageUrl.substring(0, 50) + '...',
+      timeMs: Date.now() - startTime
     });
 
+    res.json({
+      imageUrl,
+      memesRemaining: memeStats.memesRemaining,
+      userTotal: memeStats.userLimits.get(clientIP),
+      maxPerUser: memeStats.maxPerUser
+    });
   } catch (error) {
     console.error('Error generating meme:', error);
     
-    // Update error statistics
-    memeStats.failedGenerations++;
-    memeStats.generationTimes.push(Date.now() - startTime);
-
-    // Return error response
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to generate meme',
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    // Send appropriate error response
+    res.status(error.status || 500).json({
+      message: error.message || 'An unexpected error occurred while generating the meme',
+      error: process.env.NODE_ENV === 'development' ? error.toString() : undefined
     });
   }
 });
